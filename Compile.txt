@@ -1,0 +1,7 @@
+pyinstaller --onefile --noconsole --hidden-import="serial.tools.list_ports" --icon="fuid.ico" bambulab_flasher.py
+
+With program ico:
+pyinstaller --onefile --noconsole --hidden-import="serial.tools.list_ports" --icon="fuid.ico" --add-data "fuid.ico;." bambulab_flasher.py
+
+
+python bambulab_flasher.py
