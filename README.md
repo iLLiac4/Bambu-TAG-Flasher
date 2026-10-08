@@ -21,3 +21,10 @@ To use either version successfully, you only need to provide:
 * **The RFID Library:** Download the tag library from the [Bambu-Lab-RFID-Library GitHub Repository](https://github.com/queengooborg/Bambu-Lab-RFID-Library).
 * **Proxmark3 Easy:** This program is designed to work seamlessly with the **Proxmark3 Easy**.
 * **Proxmark3 & Libs:** Get precompiled builds for Proxmark3 from [Proxmark3 Builds](https://www.proxmarkbuilds.org/) and place `proxmark3.exe` along with your `libs/` folder in the program's root directory.
+
+## Compile or run
+Run program from CMD:
+python bambulab_flasher.py
+
+Compile program:
+pyinstaller --onefile --noconsole --hidden-import="serial.tools.list_ports" --icon="fuid.ico" --add-data "fuid.ico;." bambulab_flasher.py
