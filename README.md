@@ -18,7 +18,7 @@ You can run this tool either directly from the source code or via the precompile
 2. **Precompiled Executable (`.exe`):** A precompiled build is available that comes with all dependencies ready to use out of the box. 
 
 To use either version successfully, you only need to provide:
-* **Proxmark3 Easy:** This program is designed to work seamlessly with the **Proxmark3 Easy**.
+* **Proxmark3 Easy:** This program is designed to work seamlessly with the **Proxmark3 Easy**. Also require a Proxmark3 running the Iceman firmware (v4.21128 or higher).
 * **Proxmark3 & Libs:** Get precompiled builds for Proxmark3 from [Proxmark3 Builds](https://www.proxmarkbuilds.org/) and place `proxmark3.exe` along with your `libs/` folder in the program's root directory.
 
 ## Compile or run
