@@ -1,8 +1,13 @@
+# -*- coding: utf-8 -*-
 import subprocess
 import os
 import sys
 import re
 import threading
+import urllib.request
+import zipfile
+import io
+from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import webbrowser
@@ -14,7 +19,9 @@ SETTINGS_FILE_NAME = "bambu_settings.ini"
 DB_FILE_NAME = "RFID_Library.db"
 ICON_FILE_NAME = "fuid.ico"
 BAMBU_TAGS_REPO_URL = "https://github.com/queengooborg/Bambu-Lab-RFID-Library"
+BAMBU_TAGS_ZIP_URL = "https://github.com/queengooborg/Bambu-Lab-RFID-Library/archive/refs/heads/main.zip"
 DEFAULT_SETTINGS_CONTENT = r"COM1|0|.\Bambu-Lab-RFID-Library|.\Bambu-Lab-RFID-Library|0|.\Bambu-Lab-RFID-Library|https://github.com/queengooborg/Bambu-Lab-RFID-Library"
+LIBRARY_CATEGORIES = {'PLA', 'PETG', 'ABS', 'ASA', 'PC', 'TPU', 'PA', 'Support Material'}
 # ---------------------
 
 class BambulabFlasherGUI:
@@ -162,6 +169,13 @@ class BambulabFlasherGUI:
         )
         self.index_lib_btn.pack(side="right")
 
+        self.sync_lib_btn = tk.Button(
+            lib_inner, text="Sync Upstream", font=("Segoe UI", 7, "bold"),
+            bg="#0284c7", fg="#ffffff", bd=0, relief="flat", padx=6, pady=3, cursor="hand2",
+            command=self.start_sync_thread
+        )
+        self.sync_lib_btn.pack(side="right", padx=(0, 4))
+
         # --- FILE SELECTION PANEL ---
         self.file_frame = self.create_card(main_container)
         self.file_frame.grid(row=3, column=0, sticky="ew", pady=(0, 6))
@@ -253,7 +267,7 @@ class BambulabFlasherGUI:
         )
         self.reset_settings_btn.pack(side="right")
 
-        # Log Container Frame with border removed (highlightthickness=0, bd=0)
+        # Log Container Frame with border removed
         self.log_container = tk.Frame(main_container, bg="#ffffff", bd=0, relief="flat", highlightbackground=self.border_color, highlightthickness=0)
         self.log_container.grid(row=6, column=0, sticky="nsew")
         self.log_container.rowconfigure(0, weight=1)
@@ -268,7 +282,6 @@ class BambulabFlasherGUI:
         self.log_x_scrollbar = tk.Scrollbar(self.log_container, orient="horizontal", command=self.log_text.xview)
         self.log_x_scrollbar.grid(row=1, column=0, sticky="ew")
 
-        # Fill the bottom-right corner intersection block to match the scrollbar background instead of black
         self.log_corner = tk.Frame(self.log_container, bg="#f0f0f0", bd=0)
         self.log_corner.grid(row=1, column=1, sticky="nsew")
 
@@ -402,6 +415,102 @@ class BambulabFlasherGUI:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save {DB_FILE_NAME}: {str(e)}")
             self.update_status("Indexing Failed")
+        finally:
+            self.set_buttons_state(True)
+
+    def _is_uid(self, name):
+        return len(name) == 8 and all(c in '0123456789ABCDEFabcdef' for c in name)
+
+    def start_sync_thread(self):
+        lib_root = self.to_absolute(self.library_dir_var.get().strip())
+        if not lib_root:
+            messagebox.showwarning("Library Directory", "Please select a valid Bambulab library directory first!")
+            return
+
+        self.set_buttons_state(False)
+        self.update_status("Syncing library from upstream...")
+        self.log_text.delete("1.0", tk.END)
+        self.append_log("[+] Connecting to GitHub upstream repository...\n")
+
+        threading.Thread(
+            target=self.execute_upstream_sync,
+            args=(lib_root,),
+            daemon=True
+        ).start()
+
+    def execute_upstream_sync(self, lib_root):
+        try:
+            self.root.after(0, lambda: self.append_log("[+] Downloading repository archive...\n"))
+            req = urllib.request.urlopen(BAMBU_TAGS_ZIP_URL)
+            zip_data = req.read()
+
+            self.root.after(0, lambda: self.append_log("[+] Scanning local library UIDs...\n"))
+            local_uids = set()
+            if os.path.exists(lib_root):
+                for p in Path(lib_root).rglob('*'):
+                    if p.is_dir() and self._is_uid(p.name):
+                        local_uids.add(p.name.upper())
+
+            self.root.after(0, lambda: self.append_log("[+] Parsing upstream library zip...\n"))
+            with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+                all_infos = zf.infolist()
+                
+                upstream_uids = {} 
+                for info in all_infos:
+                    parts = Path(info.filename).parts
+                    if len(parts) < 5:
+                        continue
+                    category = parts[1] 
+                    if category not in LIBRARY_CATEGORIES:
+                        continue
+                    uid = parts[4]
+                    if not self._is_uid(uid):
+                        continue
+                    
+                    uid_upper = uid.upper()
+                    if uid_upper not in upstream_uids:
+                        rel_dir_parts = parts[1:5]
+                        upstream_uids[uid_upper] = {
+                            'rel_dir': os.path.join(*rel_dir_parts),
+                            'files': []
+                        }
+                    upstream_uids[uid_upper]['files'].append(info)
+
+                new_uids = {uid: data for uid, data in upstream_uids.items() if uid not in local_uids}
+
+                if not new_uids:
+                    self.root.after(0, lambda: self.append_log("[✔] Library is already up to date with upstream!\n\n"))
+                    self.root.after(0, lambda: self.update_status("Library Already Up to Date"))
+                    self.root.after(0, self.generate_db_file)
+                    return
+
+                self.root.after(0, lambda: self.append_log(f"[+] Found {len(new_uids)} new UID(s) to import. Extracting...\n"))
+                
+                total_files = 0
+                for uid, info_dict in new_uids.items():
+                    target_dir = os.path.join(lib_root, info_dict['rel_dir'])
+                    os.makedirs(target_dir, exist_ok=True)
+                    
+                    for file_info in info_dict['files']:
+                        file_name = os.path.basename(file_info.filename)
+                        if not file_name:
+                            continue
+                        dest_path = os.path.join(target_dir, file_name)
+                        if not os.path.exists(dest_path):
+                            with zf.open(file_info) as src, open(dest_path, "wb") as dst:
+                                dst.write(src.read())
+                            total_files += 1
+
+                    self.root.after(0, lambda u=uid, p=info_dict['rel_dir']: self.append_log(f"    Imported: {p}/\n"))
+
+                self.root.after(0, lambda: self.append_log(f"\n[✔] Successfully imported {len(new_uids)} new UID(s), {total_files} file(s) written.\n"))
+                self.root.after(0, lambda: self.update_status("Sync Complete. Indexing database..."))
+                self.root.after(0, self.generate_db_file)
+
+        except Exception as e:
+            self.root.after(0, lambda: self.update_status("Sync Error"))
+            self.root.after(0, lambda: self.append_log(f"\n[!] Error during upstream sync: {str(e)}\n"))
+            self.root.after(0, lambda: self.set_buttons_state(True))
 
     def lookup_material_from_db(self, target_uid):
         target_uid_clean = target_uid.upper().strip()
@@ -573,6 +682,7 @@ class BambulabFlasherGUI:
         self.browse_key_btn.config(state=btn_state)
         self.browse_lib_btn.config(state=btn_state)
         self.index_lib_btn.config(state=btn_state)
+        self.sync_lib_btn.config(state=btn_state)
         self.reset_settings_btn.config(state=btn_state)
 
     def start_flash_thread(self):
